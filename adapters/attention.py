@@ -21,8 +21,6 @@ _attention_traced_contracts = set()
 _MINIMAX_H3_H56_CUTE_MIN_SEQUENCE = 31
 _MINIMAX_H3_VAE_D64_CUTE_MIN_SEQUENCE = 6
 _VALIDATE_OUTPUT_ENV = "OMNIXPU_VALIDATE_ATTENTION_OUTPUT"
-_NAN_SCAN_EVERY = max(1, int(os.environ.get("OMNIXPU_ATTN_NAN_SCAN_EVERY", "64")))
-_nan_scan_counters = {}
 
 # ── Attention backend selection ──────────────────────────────────────────────
 # OMNI_ATTN_BACKEND selects which attention routing policy the patched ComfyUI
@@ -1275,29 +1273,18 @@ def apply():
                             tuple(out.shape), heads, q_len, kv_len)
 
         # ESIMD accumulates in FP16; the per-call full output scan is the
-        # overflow/NaN safety net. A full scan is expensive (~9.5ms/call on
-        # Krea2 seq=4192 fp16). Default: sampled scan — every shape's first
-        # call is scanned, then every OMNIXPU_ATTN_NAN_SCAN_EVERY-th call
-        # (~1/64 of the cost); a NaN immediately falls back to SDPA and the
-        # counter resets so the next call scans again. The safety net stays
-        # active, only throttled. OMNIXPU_ATTN_NAN_CHECK=0 fully disables it.
+        # overflow/NaN safety net. It is expensive on large outputs
+        # (measured ~9.5ms/call on Krea2 seq=4192 fp16, ~1s/step across the
+        # model's attention calls), so it can be disabled with
+        # OMNIXPU_ATTN_NAN_CHECK=0; default stays ON (upstream safety).
         validate_output = (
             (selected_backend == "esimd"
              and os.environ.get("OMNIXPU_ATTN_NAN_CHECK", "1") != "0")
             or _validate_attention_output()
         )
-        _scan_key = (heads, q_len, kv_len, dim_head)
-        _nan_scan_counters[_scan_key] = (
-            _nan_scan_counters.get(_scan_key, 0) + 1
-        )
-        _scan_now = (
-            _nan_scan_counters[_scan_key] % _NAN_SCAN_EVERY == 0
-            or _validate_attention_output()
-        )
         if (
             q.dtype == torch.float16
             and validate_output
-            and _scan_now
             and (out != out).any()
         ):
             _attention_fallback_count += 1
@@ -1310,8 +1297,6 @@ def apply():
                     selected_backend.upper(),
                 )
             del out, q_blhd, k_blhd, v_blhd
-            # 触发兜底后立即重置计数：下一次调用重新扫描，尽早确认恢复
-            _nan_scan_counters[_scan_key] = 0
             return _pytorch_fallback(
                 q,
                 k,
