@@ -54,6 +54,10 @@ try:
         NODE_CLASS_MAPPINGS.update(sdp_cache.NODE_CLASS_MAPPINGS)
         NODE_DISPLAY_NAME_MAPPINGS.update(sdp_cache.NODE_DISPLAY_NAME_MAPPINGS)
 
+        sol_attn = _load("nodes/sol_attn.py", f"{_PKG}.nodes.sol_attn")
+        NODE_CLASS_MAPPINGS.update(sol_attn.NODE_CLASS_MAPPINGS)
+        NODE_DISPLAY_NAME_MAPPINGS.update(sol_attn.NODE_DISPLAY_NAME_MAPPINGS)
+
 except Exception as e:
     import traceback
     log.error("[OmniXPU] Initialization failed: %s\n%s", e, traceback.format_exc())
